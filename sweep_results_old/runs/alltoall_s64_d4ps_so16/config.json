@@ -1,0 +1,17 @@
+{
+  "run_name": "alltoall_s64_d4ps_so16",
+  "constrained": false,
+  "n_spines": 64,
+  "n_dendrites_per_soma": 4,
+  "total_dendrites": 64,
+  "n_soma": 16,
+  "input_dim": 768,
+  "output_dim": 2,
+  "epochs": 500,
+  "batch_size": 32,
+  "lr": 0.0005,
+  "trainable_params": 54450,
+  "mask_summary": {},
+  "topology_png": "runs/alltoall_s64_d4ps_so16/masks_alltoall_s64_dps4_so16.png",
+  "arch_png": "runs/alltoall_s64_d4ps_so16/arch_alltoall_s64_dps4_so16.png"
+}
