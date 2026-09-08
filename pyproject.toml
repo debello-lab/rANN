@@ -1,0 +1,151 @@
+[build-system]
+requires      = ["hatchling"]
+build-backend = "hatchling.build"
+
+# ---------------------------------------------------------------------------
+# Project metadata
+# ---------------------------------------------------------------------------
+
+[project]
+name        = "rann"
+version     = "0.1.0"
+description = "Biologically-constrained restricted ANN (rANN) for binaural sound localisation — Poirazi 2025 architecture with two-channel barn owl parallel pathways (ITD/ILD)."
+readme      = "README.md"
+license     = { file = "LICENSE" }
+requires-python = ">=3.12"
+
+keywords = [
+    "neuroscience",
+    "binaural",
+    "sound-localisation",
+    "barn-owl",
+    "ITD",
+    "ILD",
+    "HRTF",
+    "neural-network",
+    "sparse-connectivity",
+    "dendritic-computation",
+]
+
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+]
+
+# ---------------------------------------------------------------------------
+# Runtime dependencies
+# ---------------------------------------------------------------------------
+
+dependencies = [
+    # Deep learning
+    "tensorflow>=2.16",
+    "keras>=3.0",
+
+    # Numerics / data
+    "numpy>=1.26",
+    "scipy>=1.13",
+    "pandas>=2.2",
+
+    # Machine learning utilities
+    "scikit-learn>=1.4",
+
+    # Visualisation
+    "matplotlib>=3.8",
+    "seaborn>=0.13",
+
+    # Audio I/O
+    "librosa>=0.10",
+    "soundfile>=0.12",
+
+    # Config / serialisation (yaml.warnings fix)
+    "pyyaml>=6.0",
+]
+
+# ---------------------------------------------------------------------------
+# Optional dependency groups
+# ---------------------------------------------------------------------------
+
+[project.optional-dependencies]
+
+# Dimensionality reduction (UMAP plots in notebook)
+umap = [
+    "umap-learn>=0.5",
+]
+
+# Jupyter / notebook workflow
+notebook = [
+    "jupyterlab>=4.0",
+    "ipykernel>=6.0",
+    "ipywidgets>=8.0",
+]
+
+# Development tools
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.4",          # linting + formatting
+    "mypy>=1.10",
+    "pre-commit>=3.7",
+]
+
+# Full install (all extras)
+all = [
+    "rann[umap,notebook,dev]",
+]
+
+# ---------------------------------------------------------------------------
+# Project scripts (CLI entry points)
+# ---------------------------------------------------------------------------
+
+[project.scripts]
+rann-sweep   = "sweep_config:main"    # run_sweep_from_configs via CLI
+rann-masks   = "bio_masks:__main__"   # validate + print mask summary
+
+# ---------------------------------------------------------------------------
+# Tool configuration
+# ---------------------------------------------------------------------------
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]   # flat layout — all .py files in repo root
+
+[tool.ruff]
+target-version = "py312"
+line-length    = 100
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "UP",   # pyupgrade
+    "NPY",  # numpy-specific rules
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+    "F401",  # unused imports (common in notebooks)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"*.ipynb" = ["E402", "F401", "F811"]  # notebooks allow re-imports and out-of-order
+
+[tool.mypy]
+python_version         = "3.12"
+ignore_missing_imports = true   # tensorflow stubs incomplete
+warn_return_any        = false
+
+[tool.pytest.ini_options]
+testpaths    = ["tests"]
+addopts      = "-v --tb=short"
+filterwarnings = [
+    "ignore::UserWarning",
+    "ignore::DeprecationWarning",
+]
+
+[tool.coverage.run]
+source = ["."]
+omit   = ["tests/*", "*.ipynb"]
