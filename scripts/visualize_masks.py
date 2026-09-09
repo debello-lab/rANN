@@ -21,7 +21,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from bio_masks import build_masks
+from git_repos.rANN.scripts.bio_masks import build_masks
 
 
 def _figure_style():
@@ -633,7 +633,7 @@ def verify_figure_masks(
 
 def _frac_name(itd_spine_frac: float) -> str:
     """Map float frac back to catalogue name for filename reconstruction."""
-    from bio_masks import ITD_SPINE_FRAC_CONFIGS
+    from git_repos.rANN.scripts.bio_masks import ITD_SPINE_FRAC_CONFIGS
     for name, val in ITD_SPINE_FRAC_CONFIGS.items():
         if abs(val - itd_spine_frac) < 1e-6:
             return name
@@ -641,7 +641,7 @@ def _frac_name(itd_spine_frac: float) -> str:
 
 
 def _overlap_name(overlap: float) -> str:
-    from bio_masks import OVERLAP_CONFIGS
+    from git_repos.rANN.scripts.bio_masks import OVERLAP_CONFIGS
     for name, val in OVERLAP_CONFIGS.items():
         if abs(val - overlap) < 1e-6:
             return name

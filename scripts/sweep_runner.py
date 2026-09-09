@@ -36,9 +36,9 @@ import tensorflow as tf
 import keras
 import matplotlib.pyplot as plt
 
-from bio_masks import sweep_masks
+from git_repos.rANN.scripts.bio_masks import sweep_masks
 
-from visualize_masks import plot_masks, plot_architectures, plot_all, verify_figure_masks, print_verification
+from git_repos.rANN.scripts.visualize_masks import plot_masks, plot_architectures, plot_all, verify_figure_masks, print_verification
 
 
 
@@ -640,7 +640,7 @@ def _make_dataset(n_samples, seed=42):
     Falls back to a minimal inline version if the notebook function is not
     importable, so this file is self-contained for testing."""
     try:
-        from rANN.make_data import create_synthetic_dataset 
+        from git_repos.rANN.scripts.make_data import create_synthetic_dataset 
         x, y, *_ = create_synthetic_dataset(n_samples=n_samples, itd_hwhh=0.03)
     except ImportError:
         # ── Minimal inline fallback (matches notebook defaults) ───────────────

@@ -74,14 +74,14 @@ import tensorflow as tf
 # ---------------------------------------------------------------------------
 # Bio-mask imports — replaces the stub np.zeros calls
 # ---------------------------------------------------------------------------
-from bio_masks import (
+from git_repos.rANN.scripts.bio_masks import (
     build_masks,
     ITD_SPINE_FRAC_CONFIGS,
     OVERLAP_CONFIGS,
     CHANNEL_DEND_SPLIT_CONFIGS,
 )
 
-from rANN_model import rANN, PerTargetMAECallback, TargetMAE
+from git_repos.rANN.scripts.rANN_model import rANN, PerTargetMAECallback, TargetMAE
 
 
 # ---------------------------------------------------------------------------
@@ -449,7 +449,7 @@ def run_sweep_from_configs(
 def _generate_topology_figures(cfg: dict, output_root: str) -> None:
     """Generate mask + architecture figures into cfg['run_dir'], update cfg in place."""
     try:
-        from visualize_masks import plot_masks, plot_architectures
+        from git_repos.rANN.scripts.visualize_masks import plot_masks, plot_architectures
     except ImportError:
         return
 

@@ -338,7 +338,7 @@ def plot_swath_masks(
                         if itd_frac is not None:
                             # Try to draw the channel split line
                             try:
-                                from bio_masks import ITD_SPINE_FRAC_CONFIGS
+                                from git_repos.rANN.scripts.bio_masks import ITD_SPINE_FRAC_CONFIGS
                                 frac = ITD_SPINE_FRAC_CONFIGS.get(itd_frac, 0.5)
                                 split = int(round(frac * n_spines))
                                 ax.axhline(split - 0.5, color="white",
@@ -544,7 +544,7 @@ if __name__ == "__main__":
             return cfg["_test_masks"]
         return _orig_load(cfg)
 
-    import plot_swath_masks as _self
+    import git_repos.rANN.scripts.plot_swath_masks as _self
     _self._load_masks_from_config = _test_load
 
     plot_swath_masks(_fake_swath, show=False,

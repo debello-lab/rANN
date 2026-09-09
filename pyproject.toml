@@ -44,25 +44,21 @@ dependencies = [
     # Deep learning
     "tensorflow>=2.16",
     "keras>=3.0",
-
     # Numerics / data
     "numpy>=1.26",
     "scipy>=1.13",
     "pandas>=2.2",
-
     # Machine learning utilities
     "scikit-learn>=1.4",
-
     # Visualisation
     "matplotlib>=3.8",
     "seaborn>=0.13",
-
     # Audio I/O
     "librosa>=0.10",
     "soundfile>=0.12",
-
     # Config / serialisation (yaml.warnings fix)
     "pyyaml>=6.0",
+    "ipykernel>=7.3.0",
 ]
 
 # ---------------------------------------------------------------------------
