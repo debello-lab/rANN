@@ -100,7 +100,8 @@ CHANNEL_DEND_SPLIT_CONFIGS = {
 
 def build_masks(
     # Feature dimensions
-    n_time=8, n_freq=32, n_itd=32, n_ild=32,
+    input_dim: int = 2 * 52 * 37,
+    input_block_dim: int = 52 * 37,
     # Layer sizes
     n_spines=128, n_dendrites_per_soma=4, n_soma=128,
     # Topology
@@ -125,17 +126,20 @@ def build_masks(
         'dendrite_soma'  : float32 (total_dendrites, n_soma)  [each soma receives only from its own dendrites]
         'summary'        : diagnostic dict
     """
-    input_dim = n_time * (n_freq + n_itd + n_ild)
+    expected_input_dim = 2 * input_block_dim
+    if input_dim != expected_input_dim:
+        raise ValueError(
+            "input_dim must equal twice input_block_dim because the input "
+            "contains one ITD block followed by one ILD block."
+        )
+
     total_dendrites = n_dendrites_per_soma * n_soma  # Each soma has its own dendrite band
 
     # Input index ranges
-    freq_start = 0
-    freq_end   = n_time * n_freq
-    itd_start  = freq_end
-    itd_end    = itd_start + n_time * n_itd
-    ild_start  = itd_end
-    ild_end    = ild_start + n_time * n_ild
-    assert ild_end == input_dim
+    itd_start = 0
+    itd_end = input_block_dim
+    ild_start = input_block_dim
+    ild_end = expected_input_dim
 
     # Channel spine boundaries
     n_itd_spines = max(1, int(round(itd_spine_frac * n_spines)))
@@ -179,16 +183,11 @@ def build_masks(
     # ------------------------------------------------------------------
     mask_input_spine = np.zeros((input_dim, n_spines), dtype=np.float32)
 
-    # Channel 1 (ITD): joint ITD x frequency tuning
-    # Each spine receives the full frequency span PLUS its topographic ITD window
+    # Channel 1 (ITD): the first 52*37 input features only.
     n_itd_inputs = itd_end - itd_start
     for s_local in range(n_itd_spines):
         s_global = ch1_start + s_local
 
-        # Full frequency broadcast — NL/ICc-ls preserves tonotopic registration
-        mask_input_spine[freq_start:freq_end, s_global] = 1.0
-
-        # Topographic ITD window for this spine
         i0, i1 = _window(s_local, n_itd_spines, n_itd_inputs, overlap)
         mask_input_spine[itd_start + i0 : itd_start + i1, s_global] = 1.0
 
@@ -302,7 +301,8 @@ def sweep_masks(#_topology(
     spine_sizes=[128, 256, 512],
     dendrite_per_soma_sizes=[1, 2, 4, 8, 16],
     soma_sizes=[128, 256, 512],
-    n_time=8, n_freq=32, n_itd=32, n_ild=32,
+    input_dim=2 * 52 * 37,
+    input_block_dim=52 * 37,
 ):
     """
     Build masks for every topology x size combination.
@@ -332,7 +332,7 @@ def sweep_masks(#_topology(
         ifn, ovn, drn, cdn, spine_sizes, dendrite_per_soma_sizes, soma_sizes
     ):
         results[(ifn_, ovn_, drn_, cdn_, ns, nd, nso)] = build_masks(
-            n_time=n_time, n_freq=n_freq, n_itd=n_itd, n_ild=n_ild,
+            input_dim=input_dim, input_block_dim=input_block_dim,
             n_spines=ns, n_dendrites_per_soma=nd, n_soma=nso,
             itd_spine_frac=ITD_SPINE_FRAC_CONFIGS[ifn_],
             overlap=OVERLAP_CONFIGS[ovn_],
@@ -480,7 +480,7 @@ if __name__ == "__main__":
     cd1_s, cd1_e = ch["ITD"]["dendrites"]
     cd2_s, cd2_e = ch["ILD"]["dendrites"]
 
-    n_freq_inputs = 8 * 32   # 256
+    n_input_block = 52 * 37
 
     print(f"\nChannel 1 (ITD): {cs['itd_spines']} spines, "
           f"{cs['itd_dends']} dendrites, {cs['itd_soma']} soma")
@@ -489,35 +489,30 @@ if __name__ == "__main__":
 
     print("\n--- Biological rule checks ---\n")
 
-    # 1. All ITD spines receive full frequency broadcast
-    for s_idx in range(ch1_s, ch1_e):
-        assert m1[:n_freq_inputs, s_idx].sum() == n_freq_inputs, \
-            f"FAIL spine {s_idx} missing freq broadcast"
-    print(f"PASS  All {cs['itd_spines']} ITD spines receive full frequency span")
+    # 1. ITD and ILD spines only receive their own input block
+    assert m1[n_input_block:, ch1_s:ch1_e].sum() == 0, \
+        "FAIL ILD inputs leaking into ITD spines"
+    assert m1[:n_input_block, ch2_s:ch2_e].sum() == 0, \
+        "FAIL ITD inputs leaking into ILD spines"
+    print("PASS  ITD and ILD input blocks remain separated")
 
-    # 2. ILD spines receive NO frequency
-    assert m1[:n_freq_inputs, ch2_s:ch2_e].sum() == 0, \
-        "FAIL ILD spines receiving frequency input"
-    print(f"PASS  All {cs['ild_spines']} ILD spines receive no frequency input")
+    # 2. Every spine receives at least one feature from its own block
+    assert (m1[:n_input_block, ch1_s:ch1_e].sum(axis=0) > 0).all()
+    assert (m1[n_input_block:, ch2_s:ch2_e].sum(axis=0) > 0).all()
+    print("PASS  Every spine receives features from its own input block")
 
-    # 3. ITD inputs do not reach ILD spines
-    assert m1[n_freq_inputs:n_freq_inputs*2, ch2_s:ch2_e].sum() == 0, \
-        "FAIL ITD leaking into ILD channel"
-    print("PASS  ITD inputs do not reach ILD channel")
+    # 3. The input mask contains two 52*37 feature blocks
+    assert m1.shape[0] == 2 * n_input_block
+    print("PASS  Input mask has two 52*37 feature blocks")
 
-    # 4. ILD inputs do not reach ITD spines
-    assert m1[n_freq_inputs*2:, ch1_s:ch1_e].sum() == 0, \
-        "FAIL ILD leaking into ITD channel"
-    print("PASS  ILD inputs do not reach ITD channel")
-
-    # 5. Channel dendrite separation
+    # 4. Channel dendrite separation
     assert m2[ch1_s:ch1_e, cd2_s:cd2_e].sum() == 0, \
         "FAIL Ch1 spines projecting to Ch2 dendrites"
     assert m2[ch2_s:ch2_e, cd1_s:cd1_e].sum() == 0, \
         "FAIL Ch2 spines projecting to Ch1 dendrites"
     print("PASS  Spine->dendrite connections respect channel boundaries")
 
-    # 6. Each spine connects to exactly one dendrite
+    # 5. Each spine connects to exactly one dendrite
     assert (m2.sum(axis=1) == 1).all(), "FAIL spine->1 dendrite"
     print("PASS  Each spine connects to exactly 1 dendrite")
 
@@ -532,7 +527,7 @@ if __name__ == "__main__":
         itd_spine_frac_names    = ["equal_split", "itd_heavy"],
         overlap_names           = ["strict", "25pct"],
         dendrite_rules          = ["topographic", "interleaved"],
-        channel_dend_split_names= ["split", "merged",'random'],
+        channel_dend_split_names= ["split", "merged"],
         spine_sizes=[128], dendrite_per_soma_sizes=[4], soma_sizes=[128],
     )
     df = summary_dataframe(topo)

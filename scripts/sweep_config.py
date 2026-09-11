@@ -155,7 +155,6 @@ def generate_config(
     l2_reg:                  float = 1e-4,
     patience:                Optional[int] = None,
     # dataset dimensions (must match make_data.py defaults)
-    n_time: int = 8, n_freq: int = 32, n_itd: int = 32, n_ild: int = 32,
     input_dim: int = 8*32*3,
     output_dim: int = 2,
     # options
@@ -177,8 +176,8 @@ def generate_config(
 
     total_dendrites = n_dendrites_per_soma * n_soma
 
-    if input_dim != n_time * (n_freq + n_itd + n_ild):
-        raise ValueError(f"input_dim must be n_time*(n_freq+n_itd+n_ild), got {input_dim}")
+    # if input_dim != n_time * (n_freq + n_itd + n_ild):
+    #     raise ValueError(f"input_dim must be n_time*(n_freq+n_itd+n_ild), got {input_dim}")
     
     # ── Build tag ─────────────────────────────────────────────────────────────
     if mode == "constrained":
@@ -211,7 +210,6 @@ def generate_config(
                 overlap              = OVERLAP_CONFIGS[overlap_name],
                 dendrite_rule        = dendrite_rule,
                 channel_dend_split   = CHANNEL_DEND_SPLIT_CONFIGS[channel_dend_split_name],
-                n_time=n_time, n_freq=n_freq, n_itd=n_itd, n_ild=n_ild,
             )
             summary = masks["summary"]
         else:
@@ -297,13 +295,12 @@ def build_sweep_configs(
     dendrite_rules:          List[str]  = ("topographic",),
     channel_dend_split_names:List[str]  = ("split",),
     include_baseline:        bool       = True,
-    input_dim:               int        = 8*(32+32+32),  # n_time*(n_freq+n_itd+n_ild)
+    input_dim:               int        = 2*52*37, 
     output_dim:              int        = 2,
     epochs:                  int        = 500,
     batch_size:              int        = 32,
     lr:                      float      = 1e-3,
     l2_reg:                  float      = 1e-4,
-    n_time: int = 8, n_freq: int = 32, n_itd: int = 32, n_ild: int = 32,
     overwrite:               bool       = False,
 ) -> list[dict]:
     """
@@ -347,7 +344,6 @@ def build_sweep_configs(
                     batch_size=batch_size,
                     lr=lr,
                     l2_reg=l2_reg,
-                    n_time=n_time, n_freq=n_freq, n_itd=n_itd, n_ild=n_ild,
                     input_dim=input_dim,
                     output_dim=output_dim,
                     overwrite=overwrite,

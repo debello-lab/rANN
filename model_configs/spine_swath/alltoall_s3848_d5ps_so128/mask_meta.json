@@ -1,0 +1,25 @@
+{
+  "config": {
+    "input_dim": 3848,
+    "n_spines": 3848,
+    "n_dendrites_per_soma": 5,
+    "total_dendrites": 640,
+    "n_soma": 128
+  },
+  "topology": {
+    "itd_spine_frac": null,
+    "overlap": null,
+    "dendrite_rule": null,
+    "channel_dend_split": null
+  },
+  "active_weights": {
+    "total": 17351744
+  },
+  "all2all_weights": {
+    "total": 17351744
+  },
+  "density": {
+    "overall": 1.0
+  },
+  "weight_reduction_pct": 0.0
+}
