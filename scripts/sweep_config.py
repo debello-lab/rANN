@@ -74,14 +74,14 @@ import tensorflow as tf
 # ---------------------------------------------------------------------------
 # Bio-mask imports — replaces the stub np.zeros calls
 # ---------------------------------------------------------------------------
-from git_repos.rANN.scripts.bio_masks import (
+from .bio_masks import (
     build_masks,
     ITD_SPINE_FRAC_CONFIGS,
     OVERLAP_CONFIGS,
     CHANNEL_DEND_SPLIT_CONFIGS,
 )
 
-from git_repos.rANN.scripts.rANN_model import rANN, PerTargetMAECallback, TargetMAE
+from .rANN_model import rANN, PerTargetMAECallback, TargetMAE
 
 
 # ---------------------------------------------------------------------------
@@ -449,7 +449,7 @@ def run_sweep_from_configs(
 def _generate_topology_figures(cfg: dict, output_root: str) -> None:
     """Generate mask + architecture figures into cfg['run_dir'], update cfg in place."""
     try:
-        from git_repos.rANN.scripts.visualize_masks import plot_masks, plot_architectures
+        from .visualize_masks import plot_masks, plot_architectures
     except ImportError:
         return
 
@@ -523,7 +523,7 @@ def _load_or_train_model(cfg, training_data, testing_data,
         epoch_90 = next((i + 1 for i, v in enumerate(val_losses) if v <= threshold), len(val_losses))
 
         if plot_history:
-            _plot_training_history(cfg['history'], run_name=tag, run_dir=run_dir, show=False)
+            plot_training_history(cfg['history'], run_name=tag, run_dir=run_dir, show=False)
 
         ms = cfg.get("mask_summary")
 
@@ -655,7 +655,7 @@ def _run_one(cfg, training_data, testing_data, plot_history=False, plot_weights=
         hist.history["val_mae"] = [(a + e) / 2.0 for a, e in zip(az, el)]
 
     if plot_history:
-        _plot_training_history(hist.history, run_name=tag, run_dir=cfg['run_dir'], show=True)
+        plot_training_history(hist.history, run_name=tag, run_dir=cfg['run_dir'], show=True)
 
     if plot_weights:
         _plot_weights(model, run_name=tag, run_dir=cfg['run_dir'], show=True)
@@ -674,7 +674,7 @@ def _run_one(cfg, training_data, testing_data, plot_history=False, plot_weights=
 
     return cfg
 
-def _plot_training_history(history: dict, run_name: str = None, run_dir: str = None, show: bool = True, accuracy: bool = False):
+def plot_training_history(history: dict, run_name: str = None, run_dir: str = None, show: bool = True, accuracy: bool = False):
     """Plot the same loss and validation per-target MAE curves shown in the notebook training cell."""
     loss_values = history.get("loss", [])
     if not loss_values:
