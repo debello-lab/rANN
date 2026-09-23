@@ -191,7 +191,7 @@ def generate_config(
     else:
         topo_tag = ""
 
-    tag     = f"{mode}_s{n_spines}_d{n_dendrites_per_soma}ps_so{n_soma}{topo_tag}"
+    tag     = f"{mode}_s{n_spines}{spine_activation}_d{n_dendrites_per_soma}{dendrite_activation}_so{n_soma}{soma_activation}{topo_tag}"
     run_dir = os.path.join(output_root, tag)
     os.makedirs(run_dir, exist_ok=True)
 
@@ -203,6 +203,7 @@ def generate_config(
     if not os.path.exists(npz_path) or overwrite:
         if mode == "constrained":
             masks = build_masks(
+                input_dim             = input_dim,
                 n_spines             = n_spines,
                 n_dendrites_per_soma = n_dendrites_per_soma,
                 n_soma               = n_soma,

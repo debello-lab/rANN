@@ -99,9 +99,18 @@ CHANNEL_DEND_SPLIT_CONFIGS = {
 # ---------------------------------------------------------------------------
 
 def build_masks(
-    # Feature dimensions
-    input_dim: int = 2 * 52 * 37,
-    input_block_dim: int = 52 * 37,
+    # Feature dimensions — pass either:
+    #   (a) input_dim alone: auto-splits into two equal ITD/ILD halves
+    #   (b) n_freq + n_itd_bins + n_ild_bins: explicit shape of each block
+    #
+    # New data format:  x = [ITD_flat | ILD_flat]
+    #   ITD_flat shape: (n_freq * n_itd_bins,)  e.g. 52*37 = 1924
+    #   ILD_flat shape: (n_freq * n_ild_bins,)  e.g. 52*37 = 1924
+    #   input_dim total: 2 * 52 * 37 = 3848
+    input_dim:       int  = 2 * 52 * 37,   # total flattened input length
+    n_freq:          int  = 52,             # frequency bins
+    n_itd_bins:      int  = 37,             # ITD axis bins (from build_hrtf_place_map)
+    n_ild_bins:      int  = 37,             # ILD axis bins (from build_hrtf_place_map)
     # Layer sizes
     n_spines=128, n_dendrites_per_soma=4, n_soma=128,
     # Topology
@@ -112,34 +121,54 @@ def build_masks(
     random_seed=0,
 ):
     """
-    Build all three connectivity masks.
+    Build all three connectivity masks for the two-channel rANN.
+
+    Input layout (matches convert_data_to_np output):
+        x = [ITD_block | ILD_block]
+              ^                ^
+              n_freq*n_itd_bins   n_freq*n_ild_bins
+        total input_dim = n_freq * (n_itd_bins + n_ild_bins)
+
+    The ITD block maps to Ch1 spines (joint ITD x frequency tuning).
+    The ILD block maps to Ch2 spines (ILD only, no frequency).
 
     Parameters
     ----------
-    n_dendrites_per_soma : each soma has this many dendrites (total dendrites = n_dendrites_per_soma * n_soma)
+    input_dim        : total flattened input length (must equal n_freq*(n_itd_bins+n_ild_bins))
+    n_freq           : number of frequency bins
+    n_itd_bins       : number of ITD axis bins in the place map
+    n_ild_bins       : number of ILD axis bins in the place map
+    n_dendrites_per_soma : each soma has this many dendrites
 
     Returns
     -------
     dict:
         'input_spine'    : float32 (input_dim, n_spines)
         'spine_dendrite' : float32 (n_spines, total_dendrites)
-        'dendrite_soma'  : float32 (total_dendrites, n_soma)  [each soma receives only from its own dendrites]
+        'dendrite_soma'  : float32 (total_dendrites, n_soma)
         'summary'        : diagnostic dict
     """
-    expected_input_dim = 2 * input_block_dim
+    # Validate dimensions
+    itd_block_dim = n_freq * n_itd_bins
+    ild_block_dim = n_freq * n_ild_bins
+    expected_input_dim = itd_block_dim + ild_block_dim
     if input_dim != expected_input_dim:
         raise ValueError(
-            "input_dim must equal twice input_block_dim because the input "
-            "contains one ITD block followed by one ILD block."
+            f"input_dim={input_dim} does not match "
+            f"n_freq*n_itd_bins + n_freq*n_ild_bins = "
+            f"{n_freq}*{n_itd_bins} + {n_freq}*{n_ild_bins} = {expected_input_dim}. "
+            f"Pass the correct n_freq, n_itd_bins, n_ild_bins for your dataset."
         )
+    input_block_dim = itd_block_dim   # kept for compatibility
 
     total_dendrites = n_dendrites_per_soma * n_soma  # Each soma has its own dendrite band
 
-    # Input index ranges
+    # Input index ranges — ITD block first, ILD block second
+    # matches x = np.concatenate([x_ipd, x_ild], axis=-1) in convert_data_to_np
     itd_start = 0
-    itd_end = input_block_dim
-    ild_start = input_block_dim
-    ild_end = expected_input_dim
+    itd_end   = itd_block_dim              # n_freq * n_itd_bins
+    ild_start = itd_block_dim
+    ild_end   = expected_input_dim         # n_freq * n_ild_bins
 
     # Channel spine boundaries
     n_itd_spines = max(1, int(round(itd_spine_frac * n_spines)))
