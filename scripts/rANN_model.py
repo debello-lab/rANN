@@ -93,6 +93,9 @@ class rANN(tf.keras.Model):
         spine_activation = "relu",
         dendrite_activation = "relu",
         soma_activation = "relu",
+        n_freq       = 52,
+        n_itd_bins   = 37,
+        n_ild_bins   = 37,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -111,6 +114,9 @@ class rANN(tf.keras.Model):
 
         self.input_dim    = input_dim
         self.output_dim   = output_dim
+        self.n_freq       = n_freq
+        self.n_itd_bins   = n_itd_bins
+        self.n_ild_bins   = n_ild_bins
         self.n_spines     = n_spines
         self.n_dendrites_per_soma = int(n_dendrites_per_soma)
         self.total_dendrites = self.n_dendrites_per_soma * n_soma
@@ -278,6 +284,9 @@ class rANN(tf.keras.Model):
         cfg.update(dict(
             input_dim    = self.input_dim,
             output_dim   = self.output_dim,
+            n_freq       = self.n_freq,
+            n_itd_bins   = self.n_itd_bins,
+            n_ild_bins   = self.n_ild_bins,
             n_spines     = self.n_spines,
             n_dendrites_per_soma = self.n_dendrites_per_soma,
             n_dendrites  = self.total_dendrites,

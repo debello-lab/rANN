@@ -157,6 +157,9 @@ def generate_config(
     # dataset dimensions (must match make_data.py defaults)
     input_dim: int = 8*32*3,
     output_dim: int = 2,
+    n_freq:                  int        = 52,
+    n_itd_bins:              int        = 37,
+    n_ild_bins:              int        = 37,
     # options
     overwrite:               bool = False,
 ) -> dict:
@@ -247,6 +250,9 @@ def generate_config(
         # Architecture sizes (redundant with summary but handy at top-level)
         "input_dim":            input_dim,
         "output_dim":           output_dim,
+        "n_freq":                n_freq,
+        "n_itd_bins":            n_itd_bins,
+        "n_ild_bins":            n_ild_bins,
         "n_spines":             n_spines,
         "n_dendrites_per_soma": n_dendrites_per_soma,
         "total_dendrites":      total_dendrites,
@@ -298,6 +304,9 @@ def build_sweep_configs(
     include_baseline:        bool       = True,
     input_dim:               int        = 2*52*37, 
     output_dim:              int        = 2,
+    n_freq:                  int        = 52,
+    n_itd_bins:              int        = 37,
+    n_ild_bins:              int        = 37,
     epochs:                  int        = 500,
     batch_size:              int        = 32,
     lr:                      float      = 1e-3,
@@ -347,6 +356,9 @@ def build_sweep_configs(
                     l2_reg=l2_reg,
                     input_dim=input_dim,
                     output_dim=output_dim,
+                    n_freq=n_freq,
+                    n_itd_bins=n_itd_bins,
+                    n_ild_bins=n_ild_bins,
                     overwrite=overwrite,
                 )
 
@@ -549,6 +561,9 @@ def _run_one(cfg, training_data, testing_data, plot_history=False, plot_weights=
     Returns a dict of results (JSON-safe).
     """
     tag = cfg["tag"]
+    n_freq = cfg["n_freq"]
+    n_itd_bins = cfg["n_itd_bins"]
+    n_ild_bins = cfg["n_ild_bins"]
 
     # Load masks on demand
     m1, m2, m3 = load_mask(cfg["mask_npz_path"])
@@ -561,6 +576,9 @@ def _run_one(cfg, training_data, testing_data, plot_history=False, plot_weights=
         input_dim    = cfg['input_dim'],
         output_dim   = cfg['output_dim'],
         n_spines     = cfg['n_spines'],
+        n_freq       = cfg['n_freq'],
+        n_itd_bins   = cfg['n_itd_bins'],
+        n_ild_bins   = cfg['n_ild_bins'],
         n_dendrites_per_soma = cfg['n_dendrites_per_soma'],
         n_soma       = cfg['n_soma'],
         spine_mask    = spine_mask,
@@ -655,7 +673,7 @@ def _run_one(cfg, training_data, testing_data, plot_history=False, plot_weights=
         plot_training_history(hist.history, run_name=tag, run_dir=cfg['run_dir'], show=True)
 
     if plot_weights:
-        _plot_weights(model, run_name=tag, run_dir=cfg['run_dir'], show=True)
+        _plot_weights(model, run_name=tag, run_dir=cfg['run_dir'], show=True, n_freq = n_freq, n_itd_bins = n_itd_bins, n_ild_bins = n_ild_bins)
 
     # ── Update config on disk with results ──────────────────────────────
     cfg['final_train_loss'] = float(hist.history["loss"][-1])
@@ -728,41 +746,56 @@ def plot_training_history(history: dict, run_name: str = None, run_dir: str = No
 
     return fig
 
-def _plot_weights(model = None, run_name: str = None, run_dir: str = None, show: bool = True):
-    """Visualize the learned weights of the model's spine, dendrite, and soma layers."""
-    
+def _plot_weights(model=None, run_name: str = None, run_dir: str = None,
+                  show: bool = True,
+                  n_freq: int = 52, 
+                  n_itd_bins: int = 37, 
+                  n_ild_bins: int = 37):
+
     layers_to_plot = [model.spine_layer, model.dendrite_layer, model.soma_layer]
+    n_cols = len(layers_to_plot)
+    n_ixd_total = n_itd_bins + n_ild_bins
+    expected_dim = n_freq * n_ixd_total
 
-    fig, axes = plt.subplots(2, len(layers_to_plot), figsize=(5 * len(layers_to_plot), 10))
+    fig, axes = plt.subplots(3, n_cols, figsize=(5 * n_cols, 14))
 
-    for col, layer in enumerate(layers_to_plot):
+    # Extract all weights upfront — needed for projected RF computation
+    w_spine    = model.spine_layer.w.numpy()     # (input_dim, n_spines)
+    w_dend     = model.dendrite_layer.w.numpy()  # (n_spines, total_dends)
+    w_soma     = model.soma_layer.w.numpy()      # (total_dends, n_soma)
 
-        weights = layer.w.numpy() 
+    for col, (layer, weights) in enumerate(zip(
+        layers_to_plot, [w_spine, w_dend, w_soma]
+    )):
 
-        # Row 0: Heatmap of weights
+        # ── Row 0: weight heatmap ─────────────────────────────────────────────
         ax_img = axes[0, col]
-        im = ax_img.imshow(weights, aspect="auto", cmap="viridis")
-        ax_img.set_title(f"{layer.name} weights")
-        ax_img.set_xlabel("Output units")
-        ax_img.set_ylabel("Input units")
+        vmax = np.abs(weights).max() or 1.0
+        im = ax_img.imshow(weights.T, aspect="auto", cmap="RdBu_r",
+                           vmin=-vmax, vmax=vmax,
+                           interpolation="nearest", origin="upper")
+        ax_img.set_title(f"{layer.name}", fontsize=10)
+        ax_img.set_xlabel("Pre-synaptic index", fontsize=8)
+        ax_img.set_ylabel("Post-synaptic index", fontsize=8)
+        ax_img.tick_params(labelsize=7)
         fig.colorbar(im, ax=ax_img, fraction=0.046, pad=0.04)
 
-        # Row 1: weight distribution
+        # ── Row 1: weight distribution ────────────────────────────────────────
         ax_dist = axes[1, col]
-        flat = weights.flatten()
-        active = flat[np.abs(flat) > 1e-8] # exclude masked zeros
+        flat   = weights.flatten()
+        active = flat[np.abs(flat) > 1e-8]
+        if len(active) == 0:
+            active = flat
 
-        ax_dist.hist(active, bins=50, alpha=0.7, color="blue", edgecolor="black")
-        ax_dist.axvline(0, color="#D85A30", lw=1.0, ls="--", label="zero")
+        ax_dist.hist(active, bins=50, alpha=0.7, color="steelblue", edgecolor="none")
+        ax_dist.axvline(0,             color="#D85A30", lw=1.0, ls="--", label="zero")
         ax_dist.axvline(active.mean(), color="#1D9E75", lw=1.2, ls="-",
                         label=f"μ={active.mean():.3f}")
-        ax_dist.set_title(f"{layer.name} weight distribution")
-        ax_dist.set_xlabel("Weight value")
-        ax_dist.set_ylabel("Frequency")
+        ax_dist.set_xlabel("Weight value", fontsize=8)
+        ax_dist.set_ylabel("Count", fontsize=8)
+        ax_dist.tick_params(labelsize=7)
         ax_dist.grid(alpha=0.3)
-        ax_dist.legend()
-
-        # Stats annotation
+        ax_dist.legend(fontsize=7, frameon=False)
         ax_dist.text(0.97, 0.95,
                      f"σ={active.std():.3f}\n"
                      f"max={active.max():.3f}\n"
@@ -771,9 +804,81 @@ def _plot_weights(model = None, run_name: str = None, run_dir: str = None, show:
                      va="top", ha="right",
                      bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.7, lw=0))
 
-        # Row labels on left edge
-        axes[0, 0].set_ylabel("Post-synaptic index\n(heatmap)", fontsize=8)
-        axes[1, 0].set_ylabel("Count\n(distribution)", fontsize=8)
+        # ── Row 2: 2D receptive field in input space ──────────────────────────
+        ax_2d = axes[2, col]
+
+        if col == 0 and weights.shape[0] == expected_dim:
+            # ── Spine: direct reshape ─────────────────────────────────────────
+            # (input_dim, n_spines) → (n_freq, n_ixd_total, n_spines) → mean over spines
+            w_3d   = weights.reshape(n_freq, n_ixd_total, -1)
+            rf_map = w_3d.mean(axis=-1)           # (n_freq, n_ixd_total)
+            title  = "Spine population RF\n(mean across spines)"
+
+        elif col == 1:
+            # ── Dendrite: projected RF = w_spine @ w_dend ────────────────────
+            # w_spine:  (input_dim, n_spines)
+            # w_dend:   (n_spines, total_dends)
+            # product:  (input_dim, total_dends) — each col is one dendrite's RF in input space
+            proj = w_spine @ w_dend              # (input_dim, total_dends)
+
+            if proj.shape[0] == expected_dim:
+                # reshape to (n_freq, n_ixd_total, total_dends) and mean over dends
+                proj_3d = proj.reshape(n_freq, n_ixd_total, -1)
+                rf_map  = proj_3d.mean(axis=-1)  # (n_freq, n_ixd_total)
+                title   = "Dendrite population RF\n(projected through spines, mean)"
+
+                # Also show per-channel split: Ch1 dends vs Ch2 dends
+                # Ch1 dends receive from Ch1 spines (ITD), Ch2 from ILD spines
+                n_itd_dends = proj_3d.shape[-1] // 2
+                rf_ch1 = proj_3d[:, :, :n_itd_dends].mean(axis=-1)
+                rf_ch2 = proj_3d[:, :, n_itd_dends:].mean(axis=-1)
+
+                # Inset: show Ch1 and Ch2 separately as two small axes
+                # (we draw the mean map in the main axis and annotate)
+            else:
+                rf_map = None
+
+        elif col == 2:
+            # ── Soma: projected RF = w_spine @ w_dend @ w_soma ───────────────
+            proj = w_spine @ w_dend @ w_soma     # (input_dim, n_soma)
+
+            if proj.shape[0] == expected_dim:
+                proj_3d = proj.reshape(n_freq, n_ixd_total, -1)
+                rf_map  = proj_3d.mean(axis=-1)
+                title   = "Soma population RF\n(projected through spines+dendrites)"
+            else:
+                rf_map = None
+
+        # ── Draw the 2D RF map ────────────────────────────────────────────────
+        if rf_map is not None:
+            vmax2d = np.abs(rf_map).max() or 1.0
+            im2d = ax_2d.imshow(
+                rf_map, aspect="auto", cmap="RdBu_r",
+                vmin=-vmax2d, vmax=vmax2d,
+                interpolation="nearest", origin="upper",
+            )
+            fig.colorbar(im2d, ax=ax_2d, fraction=0.046, pad=0.04)
+            ax_2d.axvline(n_itd_bins - 0.5, color="white", lw=1.2,
+                          ls="--", alpha=0.8)
+            ax_2d.text(n_itd_bins / 2,            -1.5, "ITD",
+                       ha="center", fontsize=8, color="white")
+            ax_2d.text(n_itd_bins + n_ild_bins / 2, -1.5, "ILD",
+                       ha="center", fontsize=8, color="white")
+            ax_2d.set_xlabel("IXD bin  (ITD → ILD)", fontsize=8)
+            ax_2d.set_ylabel("Frequency bin", fontsize=8)
+            ax_2d.set_title(title, fontsize=9)
+            ax_2d.tick_params(labelsize=7)
+        else:
+            ax_2d.text(0.5, 0.5,
+                       "shape mismatch\ncheck n_freq / n_itd_bins / n_ild_bins",
+                       ha="center", va="center", fontsize=8,
+                       transform=ax_2d.transAxes)
+            ax_2d.axis("off")
+
+    # Row labels
+    axes[0, 0].set_ylabel("Post-synaptic index\n(heatmap)", fontsize=8)
+    axes[1, 0].set_ylabel("Count\n(distribution)", fontsize=8)
+    axes[2, 0].set_ylabel("Frequency bin\n(2D RF map)", fontsize=8)
 
     if run_name:
         fig.suptitle(f"Trained weights — {run_name}", fontsize=11, y=1.01)
@@ -783,7 +888,7 @@ def _plot_weights(model = None, run_name: str = None, run_dir: str = None, show:
     if run_dir is not None:
         plot_path = os.path.join(run_dir, "final_weights.png")
         fig.savefig(plot_path, dpi=150, bbox_inches="tight")
-        print(f"  Saved training plot -> {plot_path}")
+        print(f"  Saved weight plot → {plot_path}")
 
     if show:
         plt.show()
@@ -791,6 +896,70 @@ def _plot_weights(model = None, run_name: str = None, run_dir: str = None, show:
         plt.close(fig)
 
     return fig
+
+# def _plot_weights(model = None, run_name: str = None, run_dir: str = None, show: bool = True):
+#     """Visualize the learned weights of the model's spine, dendrite, and soma layers."""
+    
+#     layers_to_plot = [model.spine_layer, model.dendrite_layer, model.soma_layer]
+
+#     fig, axes = plt.subplots(2, len(layers_to_plot), figsize=(5 * len(layers_to_plot), 10))
+
+#     for col, layer in enumerate(layers_to_plot):
+
+#         weights = layer.w.numpy() 
+
+#         # Row 0: Heatmap of weights
+#         ax_img = axes[0, col]
+#         im = ax_img.imshow(weights, aspect="auto", cmap="viridis")
+#         ax_img.set_title(f"{layer.name} weights")
+#         ax_img.set_xlabel("Output units")
+#         ax_img.set_ylabel("Input units")
+#         fig.colorbar(im, ax=ax_img, fraction=0.046, pad=0.04)
+
+#         # Row 1: weight distribution
+#         ax_dist = axes[1, col]
+#         flat = weights.flatten()
+#         active = flat[np.abs(flat) > 1e-8] # exclude masked zeros
+
+#         ax_dist.hist(active, bins=50, alpha=0.7, color="blue", edgecolor="black")
+#         ax_dist.axvline(0, color="#D85A30", lw=1.0, ls="--", label="zero")
+#         ax_dist.axvline(active.mean(), color="#1D9E75", lw=1.2, ls="-",
+#                         label=f"μ={active.mean():.3f}")
+#         ax_dist.set_title(f"{layer.name} weight distribution")
+#         ax_dist.set_xlabel("Weight value")
+#         ax_dist.set_ylabel("Frequency")
+#         ax_dist.grid(alpha=0.3)
+#         ax_dist.legend()
+
+#         # Stats annotation
+#         ax_dist.text(0.97, 0.95,
+#                      f"σ={active.std():.3f}\n"
+#                      f"max={active.max():.3f}\n"
+#                      f"non-zero: {len(active):,}/{len(flat):,}",
+#                      transform=ax_dist.transAxes, fontsize=7,
+#                      va="top", ha="right",
+#                      bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.7, lw=0))
+
+#         # Row labels on left edge
+#         axes[0, 0].set_ylabel("Post-synaptic index\n(heatmap)", fontsize=8)
+#         axes[1, 0].set_ylabel("Count\n(distribution)", fontsize=8)
+
+#     if run_name:
+#         fig.suptitle(f"Trained weights — {run_name}", fontsize=11, y=1.01)
+
+#     plt.tight_layout()
+
+#     if run_dir is not None:
+#         plot_path = os.path.join(run_dir, "final_weights.png")
+#         fig.savefig(plot_path, dpi=150, bbox_inches="tight")
+#         print(f"  Saved training plot -> {plot_path}")
+
+#     if show:
+#         plt.show()
+#     else:
+#         plt.close(fig)
+
+#     return fig
 
 def _alltoall_masks(input_dim, n_spines, total_dendrites, n_soma):
     """Return fully dense (all-ones) masks for the all-to-all baseline."""
