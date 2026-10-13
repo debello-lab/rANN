@@ -149,6 +149,9 @@ def build_masks(
         'summary'        : diagnostic dict
     """
     # Validate dimensions
+    if n_spines < 2:
+        raise ValueError("n_spines must be at least 2 so both channels receive a spine")
+
     itd_block_dim = n_freq * n_itd_bins
     ild_block_dim = n_freq * n_ild_bins
     expected_input_dim = itd_block_dim + ild_block_dim
@@ -441,8 +444,12 @@ def _window(s_local, n_spines, n_inputs, overlap):
     """Compute [i0, i1) input window for spine s_local."""
     window = n_inputs / n_spines
     step   = max(window * (1.0 - overlap), 1.0)
-    i0 = min(int(round(s_local * step)),          n_inputs - 1)
-    i1 = min(int(round(s_local * step + window)), n_inputs)
+    # Floor starts and ceil ends so rounding cannot leave gaps between
+    # adjacent receptive fields or at the final input boundary.
+    i0 = min(int(np.floor(s_local * step)),          n_inputs - 1)
+    i1 = min(int(np.ceil(s_local * step + window)), n_inputs)
+    if s_local == n_spines - 1:
+        i1 = n_inputs
     if i0 >= i1:
         i1 = i0 + 1
     return i0, i1
@@ -458,18 +465,21 @@ def _assign_spines_to_dends(mask, spine_start, spine_end,
 
     if rule == "topographic":
         for s_local in range(n_sp):
-            d0 = int(round(s_local       * n_de / n_sp))
-            d1 = int(round((s_local + 1) * n_de / n_sp))
-            d  = min(d0, n_de - 1)   # each spine -> one dendrite
-            mask[spine_start + s_local, dend_start + d] = 1.0
+            d0 = min(int(np.floor(s_local * n_de / n_sp)), n_de - 1)
+            d1 = min(max(int(np.ceil((s_local + 1) * n_de / n_sp)), d0 + 1), n_de)
+            mask[spine_start + s_local, dend_start + d0:dend_start + d1] = 1.0
 
     elif rule == "interleaved":
         for s_local in range(n_sp):
             mask[spine_start + s_local, dend_start + (s_local % n_de)] = 1.0
+        for d_local in range(n_de):
+            mask[spine_start + (d_local % n_sp), dend_start + d_local] = 1.0
 
     elif rule == "random":
         rng = np.random.default_rng(seed)
         for s_local, d_local in enumerate(rng.integers(0, n_de, size=n_sp)):
+            mask[spine_start + s_local, dend_start + d_local] = 1.0
+        for d_local, s_local in enumerate(rng.integers(0, n_sp, size=n_de)):
             mask[spine_start + s_local, dend_start + d_local] = 1.0
 
 
