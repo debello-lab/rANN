@@ -367,15 +367,22 @@ def build_sweep_configs(
     ))
     activation_combos = list(product(spine_activations, dendrite_activations, soma_activations))
 
-    n_total = (
-        len(topo_combos) + int(include_baseline)
-    ) * len(size_combos) * len(activation_combos)
+    n_constrained = len(size_combos) * len(topo_combos) * len(activation_combos)
+    n_baseline = (
+        len(spine_sizes)
+        * len(dendrite_per_soma_sizes)
+        * len(soma_sizes)
+        * len(activation_combos)
+        if include_baseline
+        else 0
+    )
+    n_total = n_constrained + n_baseline
 
     print(f"Building {n_total} configs "
-          f"({len(size_combos)} size × {len(topo_combos)} topology × {len(activation_combos)} activation"
-          f"{' + ' + str(len(size_combos) * len(activation_combos)) + ' (+ baseline)' if include_baseline else ''})…")
+          f"({n_constrained} constrained"
+          f"{' + ' + str(n_baseline) + ' all-to-all' if include_baseline else ''})…")
 
-    seen_activations = []
+    seen_baselines = set()
 
     for ns, ndps, nso, sps, dps, sos in size_combos:
         for ifn, ovn, dr, cdn in topo_combos:
@@ -417,14 +424,20 @@ def build_sweep_configs(
 
                 # All-to-all baseline (same size, no topology)
                 if include_baseline:
-                    # Skip duplicate activations for all-to-all baseline
-                    activation_key = (sa, da, soa, sps, dps, sos)
-                    if activation_key in seen_activations:
+                    # Projection sizes do not affect an all-to-all model.
+                    baseline_key = (ns, ndps, nso, sa, da, soa)
+                    if baseline_key in seen_baselines:
                         continue
-                    seen_activations.append(activation_key)
+                    seen_baselines.add(baseline_key)
+                    baseline_shared = {
+                        **shared,
+                        "spine_projection_size": None,
+                        "dendrite_projection_size": None,
+                        "soma_projection_size": None,
+                    }
                     cfg_a = generate_config(
                         mode="alltoall",
-                        **shared,
+                        **baseline_shared,
                     )
                     configs.append(cfg_a)
 
