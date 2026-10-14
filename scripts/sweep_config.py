@@ -160,6 +160,9 @@ def generate_config(
     n_freq:                  int        = 52,
     n_itd_bins:              int        = 37,
     n_ild_bins:              int        = 37,
+    spine_projection_size:   Optional[tuple[int, int]] = None,
+    dendrite_projection_size: Optional[tuple[int, int]] = None,
+    soma_projection_size:    Optional[tuple[int, int]] = None,
     # options
     overwrite:               bool = False,
 ) -> dict:
@@ -194,7 +197,22 @@ def generate_config(
     else:
         topo_tag = ""
 
-    tag     = f"{mode}_s{n_spines}{spine_activation}_d{n_dendrites_per_soma}{dendrite_activation}_so{n_soma}{soma_activation}{topo_tag}"
+    projection_tag = ""
+    if any(size is not None for size in (
+        spine_projection_size,
+        dendrite_projection_size,
+        soma_projection_size,
+    )):
+        projection_tag = (
+            f"_ps{spine_projection_size}"
+            f"_pd{dendrite_projection_size}"
+            f"_pm{soma_projection_size}"
+        )
+    tag = (
+        f"{mode}_s{n_spines}{spine_activation}"
+        f"_d{n_dendrites_per_soma}{dendrite_activation}"
+        f"_so{n_soma}{soma_activation}{topo_tag}{projection_tag}"
+    )
     run_dir = os.path.join(output_root, tag)
     os.makedirs(run_dir, exist_ok=True)
 
@@ -207,6 +225,9 @@ def generate_config(
         if mode == "constrained":
             masks = build_masks(
                 input_dim             = input_dim,
+                n_freq               = n_freq,
+                n_itd_bins           = n_itd_bins,
+                n_ild_bins           = n_ild_bins,
                 n_spines             = n_spines,
                 n_dendrites_per_soma = n_dendrites_per_soma,
                 n_soma               = n_soma,
@@ -214,6 +235,9 @@ def generate_config(
                 overlap              = OVERLAP_CONFIGS[overlap_name],
                 dendrite_rule        = dendrite_rule,
                 channel_dend_split   = CHANNEL_DEND_SPLIT_CONFIGS[channel_dend_split_name],
+                spine_projection_size = spine_projection_size,
+                dendrite_projection_size = dendrite_projection_size,
+                soma_projection_size = soma_projection_size,
             )
             summary = masks["summary"]
         else:
@@ -260,6 +284,9 @@ def generate_config(
         'spine_activation':        spine_activation,
         'dendrite_activation':     dendrite_activation,
         'soma_activation':         soma_activation,
+        "spine_projection_size":   spine_projection_size,
+        "dendrite_projection_size": dendrite_projection_size,
+        "soma_projection_size":    soma_projection_size,
         # Topology
         "itd_spine_frac_name":     itd_spine_frac_name,
         "overlap_name":            overlap_name,
@@ -307,6 +334,9 @@ def build_sweep_configs(
     n_freq:                  int        = 52,
     n_itd_bins:              int        = 37,
     n_ild_bins:              int        = 37,
+    spine_projection_sizes:  List[Optional[tuple[int, int]]] = (None,),
+    dendrite_projection_sizes: List[Optional[tuple[int, int]]] = (None,),
+    soma_projection_sizes:   List[Optional[tuple[int, int]]] = (None,),
     epochs:                  int        = 500,
     batch_size:              int        = 32,
     lr:                      float      = 1e-3,
@@ -324,13 +354,22 @@ def build_sweep_configs(
     """
     configs = []
 
-    size_combos = list(product(spine_sizes, dendrite_per_soma_sizes, soma_sizes))
+    size_combos = list(product(
+        spine_sizes,
+        dendrite_per_soma_sizes,
+        soma_sizes,
+        spine_projection_sizes,
+        dendrite_projection_sizes,
+        soma_projection_sizes,
+    ))
     topo_combos = list(product(
         itd_spine_frac_names, overlap_names, dendrite_rules, channel_dend_split_names
     ))
     activation_combos = list(product(spine_activations, dendrite_activations, soma_activations))
 
-    n_total = (len(topo_combos) + 1) * len(size_combos) * len(activation_combos)
+    n_total = (
+        len(topo_combos) + int(include_baseline)
+    ) * len(size_combos) * len(activation_combos)
 
     print(f"Building {n_total} configs "
           f"({len(size_combos)} size × {len(topo_combos)} topology × {len(activation_combos)} activation"
@@ -338,7 +377,7 @@ def build_sweep_configs(
 
     seen_activations = []
 
-    for ns, ndps, nso in size_combos:
+    for ns, ndps, nso, sps, dps, sos in size_combos:
         for ifn, ovn, dr, cdn in topo_combos:
             for sa, da, soa in activation_combos:
 
@@ -359,6 +398,9 @@ def build_sweep_configs(
                     n_freq=n_freq,
                     n_itd_bins=n_itd_bins,
                     n_ild_bins=n_ild_bins,
+                    spine_projection_size=sps,
+                    dendrite_projection_size=dps,
+                    soma_projection_size=sos,
                     overwrite=overwrite,
                 )
 
@@ -376,9 +418,10 @@ def build_sweep_configs(
                 # All-to-all baseline (same size, no topology)
                 if include_baseline:
                     # Skip duplicate activations for all-to-all baseline
-                    if (sa, da, soa) in seen_activations:
+                    activation_key = (sa, da, soa, sps, dps, sos)
+                    if activation_key in seen_activations:
                         continue
-                    seen_activations.append((sa, da, soa))
+                    seen_activations.append(activation_key)
                     cfg_a = generate_config(
                         mode="alltoall",
                         **shared,

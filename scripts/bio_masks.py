@@ -119,6 +119,9 @@ def build_masks(
     dendrite_rule="topographic",
     channel_dend_split=True,
     random_seed=0,
+    spine_projection_size=None,
+    dendrite_projection_size=None,
+    soma_projection_size=None,
 ):
     """
     Build all three connectivity masks for the two-channel rANN.
@@ -147,7 +150,43 @@ def build_masks(
         'spine_dendrite' : float32 (n_spines, total_dendrites)
         'dendrite_soma'  : float32 (total_dendrites, n_soma)
         'summary'        : diagnostic dict
+
+    Optional projection sizes
+    -------------------------
+    ``spine_projection_size``, ``dendrite_projection_size``, and
+    ``soma_projection_size`` are positive integers or ``(height, width)``
+    pairs.  When all three are supplied, masks use spatial diamond
+    projections; when omitted, the standard topology rules are unchanged.
     """
+    if any(size is not None for size in (
+        spine_projection_size,
+        dendrite_projection_size,
+        soma_projection_size,
+    )):
+        if any(size is None for size in (
+            spine_projection_size,
+            dendrite_projection_size,
+            soma_projection_size,
+        )):
+            raise ValueError(
+                "spine_projection_size, dendrite_projection_size, and "
+                "soma_projection_size must be provided together."
+            )
+        return _build_spatial_masks(
+            input_dim=input_dim,
+            n_freq=n_freq,
+            n_itd_bins=n_itd_bins,
+            n_ild_bins=n_ild_bins,
+            n_spines=n_spines,
+            n_dendrites_per_soma=n_dendrites_per_soma,
+            n_soma=n_soma,
+            itd_spine_frac=itd_spine_frac,
+            channel_dend_split=channel_dend_split,
+            spine_projection_size=spine_projection_size,
+            dendrite_projection_size=dendrite_projection_size,
+            soma_projection_size=soma_projection_size,
+        )
+
     # Validate dimensions
     if n_spines < 2:
         raise ValueError("n_spines must be at least 2 so both channels receive a spine")
@@ -439,6 +478,219 @@ def print_sweep_summary(all_masks):
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+def _projection_shape(size):
+    """Normalize a projection size to a positive (height, width) tuple."""
+    if isinstance(size, int):
+        size = (size, size)
+    if len(size) != 2 or any(int(value) < 1 for value in size):
+        raise ValueError(
+            f"Projection size must be a positive integer or pair, got {size!r}."
+        )
+    return int(size[0]), int(size[1])
+
+
+def _grid_shape(n_units):
+    """Return a compact grid shape whose product is exactly n_units."""
+    rows = max(1, int(np.sqrt(n_units)))
+    while n_units % rows:
+        rows -= 1
+    return rows, n_units // rows
+
+
+def _diamond_indices(center, size, shape):
+    """Return clipped indices for a rectangular diamond projection."""
+    height, width = _projection_shape(size)
+    row_center, col_center = center
+    row_radius = height // 2
+    col_radius = width // 2
+    rows, cols = np.indices(shape)
+    inside = (
+        np.abs(rows - row_center) / max(row_radius, 1)
+        + np.abs(cols - col_center) / max(col_radius, 1)
+        <= 1.0
+    )
+    if height == 1:
+        inside &= rows == row_center
+    if width == 1:
+        inside &= cols == col_center
+    return inside.ravel()
+
+
+def _build_spatial_masks(
+    input_dim,
+    n_freq,
+    n_itd_bins,
+    n_ild_bins,
+    n_spines,
+    n_dendrites_per_soma,
+    n_soma,
+    itd_spine_frac,
+    channel_dend_split,
+    spine_projection_size,
+    dendrite_projection_size,
+    soma_projection_size,
+):
+    """Build masks from spatial diamond projections.
+
+    This optional path preserves the standard mask shapes and dictionary
+    keys while allowing projection footprints to be swept.
+    """
+    itd_inputs = n_freq * n_itd_bins
+    ild_inputs = n_freq * n_ild_bins
+    expected_input_dim = itd_inputs + ild_inputs
+    if input_dim != expected_input_dim:
+        raise ValueError(
+            f"input_dim={input_dim} does not match the feature dimensions "
+            f"({expected_input_dim})."
+        )
+
+    total_dendrites = n_dendrites_per_soma * n_soma
+    spine_shape = _grid_shape(n_spines)
+    dendrite_shape = _grid_shape(total_dendrites)
+    soma_shape = _grid_shape(n_soma)
+    spine_projection_size = _projection_shape(spine_projection_size)
+    dendrite_projection_size = _projection_shape(dendrite_projection_size)
+    soma_projection_size = _projection_shape(soma_projection_size)
+
+    input_spine = np.zeros((input_dim, n_spines), dtype=np.float32)
+    spine_dendrite = np.zeros(
+        (n_spines, total_dendrites), dtype=np.float32
+    )
+    dendrite_soma = np.zeros(
+        (total_dendrites, n_soma), dtype=np.float32
+    )
+
+    n_itd_spines = max(1, int(round(itd_spine_frac * n_spines)))
+    n_itd_spines = min(n_spines - 1, n_itd_spines)
+
+    def unit_center(index, shape):
+        return np.unravel_index(index, shape)
+
+    def input_center(index, n_bins):
+        return divmod(index, n_bins)
+
+    for input_index in range(input_dim):
+        if input_index < itd_inputs:
+            local_index = input_index
+            n_bins = n_itd_bins
+            spine_start, spine_end = 0, n_itd_spines
+        else:
+            local_index = input_index - itd_inputs
+            n_bins = n_ild_bins
+            spine_start, spine_end = n_itd_spines, n_spines
+
+        row, col = input_center(local_index, n_bins)
+        spine_rows = np.clip(
+            round(row * (spine_shape[0] - 1) / max(n_freq - 1, 1)),
+            0, spine_shape[0] - 1,
+        )
+        spine_cols = np.clip(
+            round(col * (spine_shape[1] - 1) / max(n_bins - 1, 1)),
+            0, spine_shape[1] - 1,
+        )
+        active = _diamond_indices(
+            (spine_rows, spine_cols),
+            spine_projection_size,
+            spine_shape,
+        )
+        input_spine[input_index, spine_start:spine_end] = active[
+            spine_start:spine_end
+        ]
+
+    for spine_index in range(n_spines):
+        row, col = unit_center(spine_index, spine_shape)
+        active = _diamond_indices(
+            (
+                round(row * (dendrite_shape[0] - 1) / max(spine_shape[0] - 1, 1)),
+                round(col * (dendrite_shape[1] - 1) / max(spine_shape[1] - 1, 1)),
+            ),
+            dendrite_projection_size,
+            dendrite_shape,
+        )
+        if channel_dend_split:
+            spine_channel = spine_index < n_itd_spines
+            dendrite_split = max(
+                1, int(round(itd_spine_frac * total_dendrites))
+            )
+            allowed = np.zeros(total_dendrites, dtype=bool)
+            if spine_channel:
+                allowed[:dendrite_split] = True
+            else:
+                allowed[dendrite_split:] = True
+            active &= allowed
+        spine_dendrite[spine_index] = active
+
+    for dendrite_index in range(total_dendrites):
+        row, col = unit_center(dendrite_index, dendrite_shape)
+        active = _diamond_indices(
+            (
+                round(row * (soma_shape[0] - 1) / max(dendrite_shape[0] - 1, 1)),
+                round(col * (soma_shape[1] - 1) / max(dendrite_shape[1] - 1, 1)),
+            ),
+            soma_projection_size,
+            soma_shape,
+        )
+        dendrite_soma[dendrite_index] = active
+
+    active_total = int(
+        input_spine.sum() + spine_dendrite.sum() + dendrite_soma.sum()
+    )
+    all_to_all = (
+        input_dim * n_spines
+        + n_spines * total_dendrites
+        + total_dendrites * n_soma
+    )
+    return {
+        "input_spine": input_spine,
+        "spine_dendrite": spine_dendrite,
+        "dendrite_soma": dendrite_soma,
+        "summary": {
+            "config": {
+                "input_dim": input_dim,
+                "n_spines": n_spines,
+                "n_dendrites_per_soma": n_dendrites_per_soma,
+                "total_dendrites": total_dendrites,
+                "n_soma": n_soma,
+                "spine_projection_size": spine_projection_size,
+                "dendrite_projection_size": dendrite_projection_size,
+                "soma_projection_size": soma_projection_size,
+            },
+            "active_weights": {
+                "input_spine": int(input_spine.sum()),
+                "spine_dendrite": int(spine_dendrite.sum()),
+                "dendrite_soma": int(dendrite_soma.sum()),
+                "ch1_input_spine": int(input_spine[:, :n_itd_spines].sum()),
+                "ch2_input_spine": int(input_spine[:, n_itd_spines:].sum()),
+                "total": active_total,
+            },
+            "channel_sizes": {
+                "itd_spines": n_itd_spines,
+                "ild_spines": n_spines - n_itd_spines,
+                "itd_dends": max(1, int(round(itd_spine_frac * total_dendrites))),
+                "ild_dends": total_dendrites - max(
+                    1, int(round(itd_spine_frac * total_dendrites))
+                ),
+            },
+            "all2all_weights": {"total": all_to_all},
+            "density": {
+                "input_spine": round(
+                    input_spine.sum() / (input_dim * n_spines), 4
+                ),
+                "spine_dendrite": round(
+                    spine_dendrite.sum() / (n_spines * total_dendrites), 4
+                ),
+                "dendrite_soma": round(
+                    dendrite_soma.sum() / (total_dendrites * n_soma), 4
+                ),
+                "overall": round(active_total / all_to_all, 4),
+            },
+            "weight_reduction_pct": round(
+                (1 - active_total / all_to_all) * 100, 1
+            ),
+        },
+    }
+
 
 def _window(s_local, n_spines, n_inputs, overlap):
     """Compute [i0, i1) input window for spine s_local."""
