@@ -317,133 +317,223 @@ def generate_config(
 # ---------------------------------------------------------------------------
 
 def build_sweep_configs(
-    output_root:             str,
-    spine_sizes:             List[int]  = (128,),
-    spine_activations:         List[str]  = ("relu",),
-    dendrite_activations:     List[str]  = ("relu",),
-    soma_activations:         List[str]  = ("relu",),
-    dendrite_per_soma_sizes: List[int]  = (4,),
-    soma_sizes:              List[int]  = (128,),
-    itd_spine_frac_names:    List[str]  = ("equal_split",),
-    overlap_names:           List[str]  = ("strict",),
-    dendrite_rules:          List[str]  = ("topographic",),
-    channel_dend_split_names:List[str]  = ("split",),
-    include_baseline:        bool       = True,
-    input_dim:               int        = 2*52*37, 
-    output_dim:              int        = 2,
-    n_freq:                  int        = 52,
-    n_itd_bins:              int        = 37,
-    n_ild_bins:              int        = 37,
-    spine_projection_sizes:  List[Optional[tuple[int, int]]] = (None,),
+    output_root: str,
+    spine_sizes: List[int] = (128,),
+    spine_activations: List[str] = ("relu",),
+    dendrite_activations: List[str] = ("relu",),
+    soma_activations: List[str] = ("relu",),
+    dendrite_per_soma_sizes: List[int] = (4,),
+    soma_sizes: List[int] = (128,),
+    itd_spine_frac_names: List[str] = ("equal_split",),
+    overlap_names: List[str] = ("strict",),
+    dendrite_rules: List[str] = ("topographic",),
+    channel_dend_split_names: List[str] = ("split",),
+    include_nonspatial_constrained: bool = True,
+    include_baseline: bool = True,
+    input_dim: int = 2 * 52 * 37,
+    output_dim: int = 2,
+    n_freq: int = 52,
+    n_itd_bins: int = 37,
+    n_ild_bins: int = 37,
+    spine_projection_sizes: List[Optional[tuple[int, int]]] = (None,),
     dendrite_projection_sizes: List[Optional[tuple[int, int]]] = (None,),
-    soma_projection_sizes:   List[Optional[tuple[int, int]]] = (None,),
-    epochs:                  int        = 500,
-    batch_size:              int        = 32,
-    lr:                      float      = 1e-3,
-    l2_reg:                  float      = 1e-4,
-    overwrite:               bool       = False,
+    soma_projection_sizes: List[Optional[tuple[int, int]]] = (None,),
+    epochs: int = 500,
+    batch_size: int = 32,
+    lr: float = 1e-3,
+    l2_reg: float = 1e-4,
+    overwrite: bool = False,
 ) -> list[dict]:
     """
-    Generate a config dict for every combination in the sweep grid.
+    Generate configuration dictionaries for the requested sweep grid.
 
-    Returns a flat list of config dicts ready to pass to _run_sweep.
-    Each entry is JSON-safe; masks are pre-built and saved to disk.
+    The generated configurations are divided into independent families:
 
-    The list alternates constrained / alltoall for easy paired comparison:
-        [constrained_A, alltoall_A, constrained_B, alltoall_B, ...]
+    - non-spatial constrained: projection sizes are all None
+    - spatial constrained: all three projection sizes are provided
+    - all-to-all baseline: dense masks and no topology parameters
+
+    Incomplete projection-size triples are ignored. A spatial configuration
+    is created only when spine, dendrite, and soma projection sizes are all
+    non-None.
     """
     configs = []
 
-    size_combos = list(product(
+    base_size_combos = list(product(
         spine_sizes,
         dendrite_per_soma_sizes,
         soma_sizes,
+    ))
+
+    topo_combos = list(product(
+        itd_spine_frac_names,
+        overlap_names,
+        dendrite_rules,
+        channel_dend_split_names,
+    ))
+
+    activation_combos = list(product(
+        spine_activations,
+        dendrite_activations,
+        soma_activations,
+    ))
+
+    projection_combos = list(product(
         spine_projection_sizes,
         dendrite_projection_sizes,
         soma_projection_sizes,
     ))
-    topo_combos = list(product(
-        itd_spine_frac_names, overlap_names, dendrite_rules, channel_dend_split_names
-    ))
-    activation_combos = list(product(spine_activations, dendrite_activations, soma_activations))
 
-    n_constrained = len(size_combos) * len(topo_combos) * len(activation_combos)
+    spatial_projection_combos = [
+        (sps, dps, sos)
+        for sps, dps, sos in projection_combos
+        if sps is not None
+        and dps is not None
+        and sos is not None
+    ]
+
+    n_nonspatial = (
+        len(base_size_combos)
+        * len(topo_combos)
+        * len(activation_combos)
+        if include_nonspatial_constrained
+        else 0
+    )
+
+    n_spatial = (
+        len(base_size_combos)
+        * len(spatial_projection_combos)
+        * len(topo_combos)
+        * len(activation_combos)
+    )
+
     n_baseline = (
-        len(spine_sizes)
-        * len(dendrite_per_soma_sizes)
-        * len(soma_sizes)
+        len(base_size_combos)
         * len(activation_combos)
         if include_baseline
         else 0
     )
-    n_total = n_constrained + n_baseline
 
-    print(f"Building {n_total} configs "
-          f"({n_constrained} constrained"
-          f"{' + ' + str(n_baseline) + ' all-to-all' if include_baseline else ''})…")
+    n_total = n_nonspatial + n_spatial + n_baseline
 
-    seen_baselines = set()
+    families = []
+    if include_nonspatial_constrained:
+        families.append(f"{n_nonspatial} non-spatial constrained")
+    if n_spatial:
+        families.append(f"{n_spatial} spatial constrained")
+    if include_baseline:
+        families.append(f"{n_baseline} all-to-all")
 
-    for ns, ndps, nso, sps, dps, sos in size_combos:
-        for ifn, ovn, dr, cdn in topo_combos:
-            for sa, da, soa in activation_combos:
+    print(f"Building {n_total} configs ({' + '.join(families)})...")
 
-                shared = dict(
-                    output_root=output_root,
-                    spine_activation=sa,
-                    dendrite_activation=da,
-                    soma_activation=soa,
-                    n_spines=ns,
-                    n_dendrites_per_soma=ndps,
-                    n_soma=nso,
-                    epochs=epochs,
-                    batch_size=batch_size,
-                    lr=lr,
-                    l2_reg=l2_reg,
-                    input_dim=input_dim,
-                    output_dim=output_dim,
-                    n_freq=n_freq,
-                    n_itd_bins=n_itd_bins,
-                    n_ild_bins=n_ild_bins,
-                    spine_projection_size=sps,
-                    dendrite_projection_size=dps,
-                    soma_projection_size=sos,
-                    overwrite=overwrite,
-                )
+    def make_shared(
+        ns,
+        ndps,
+        nso,
+        sa,
+        da,
+        soa,
+        spine_projection_size=None,
+        dendrite_projection_size=None,
+        soma_projection_size=None,
+    ):
+        return dict(
+            output_root=output_root,
+            spine_activation=sa,
+            dendrite_activation=da,
+            soma_activation=soa,
+            n_spines=ns,
+            n_dendrites_per_soma=ndps,
+            n_soma=nso,
+            epochs=epochs,
+            batch_size=batch_size,
+            lr=lr,
+            l2_reg=l2_reg,
+            input_dim=input_dim,
+            output_dim=output_dim,
+            n_freq=n_freq,
+            n_itd_bins=n_itd_bins,
+            n_ild_bins=n_ild_bins,
+            spine_projection_size=spine_projection_size,
+            dendrite_projection_size=dendrite_projection_size,
+            soma_projection_size=soma_projection_size,
+            overwrite=overwrite,
+        )
 
-                # Constrained run
-                cfg_c = generate_config(
-                    mode="constrained",
-                    itd_spine_frac_name=ifn,
-                    overlap_name=ovn,
-                    dendrite_rule=dr,
-                    channel_dend_split_name=cdn,
-                    **shared,
-                )
-                configs.append(cfg_c)
+    def append_constrained(
+        shared,
+        ifn,
+        ovn,
+        dr,
+        cdn,
+    ):
+        configs.append(
+            generate_config(
+                mode="constrained",
+                itd_spine_frac_name=ifn,
+                overlap_name=ovn,
+                dendrite_rule=dr,
+                channel_dend_split_name=cdn,
+                **shared,
+            )
+        )
 
-                # All-to-all baseline (same size, no topology)
-                if include_baseline:
-                    # Projection sizes do not affect an all-to-all model.
-                    baseline_key = (ns, ndps, nso, sa, da, soa)
-                    if baseline_key in seen_baselines:
-                        continue
-                    seen_baselines.add(baseline_key)
-                    baseline_shared = {
-                        **shared,
-                        "spine_projection_size": None,
-                        "dendrite_projection_size": None,
-                        "soma_projection_size": None,
-                    }
-                    cfg_a = generate_config(
-                        mode="alltoall",
-                        **baseline_shared,
+    # Non-spatial constrained configurations.
+    if include_nonspatial_constrained:
+        for ns, ndps, nso in base_size_combos:
+            for ifn, ovn, dr, cdn in topo_combos:
+                for sa, da, soa in activation_combos:
+                    shared = make_shared(
+                        ns,
+                        ndps,
+                        nso,
+                        sa,
+                        da,
+                        soa,
                     )
-                    configs.append(cfg_a)
+                    append_constrained(shared, ifn, ovn, dr, cdn)
 
-    print(f"Done — {len(configs)} configs ready.")
+    # Spatial biologically inspired constrained configurations.
+    for ns, ndps, nso in base_size_combos:
+        for sps, dps, sos in spatial_projection_combos:
+            for ifn, ovn, dr, cdn in topo_combos:
+                for sa, da, soa in activation_combos:
+                    shared = make_shared(
+                        ns,
+                        ndps,
+                        nso,
+                        sa,
+                        da,
+                        soa,
+                        spine_projection_size=sps,
+                        dendrite_projection_size=dps,
+                        soma_projection_size=sos,
+                    )
+                    append_constrained(shared, ifn, ovn, dr, cdn)
+
+    # All-to-all baselines. These are generated independently of the
+    # projection-size sweep, so they still exist when projection sizes are
+    # omitted or contain no complete spatial triples.
+    if include_baseline:
+        for ns, ndps, nso in base_size_combos:
+            for sa, da, soa in activation_combos:
+                shared = make_shared(
+                    ns,
+                    ndps,
+                    nso,
+                    sa,
+                    da,
+                    soa,
+                )
+                configs.append(
+                    generate_config(
+                        mode="alltoall",
+                        **shared,
+                    )
+                )
+
+    print(f"Done - {len(configs)} configs ready.")
     return configs
-
 
 # ---------------------------------------------------------------------------
 # Sweep runner (replaces _run_sweep)
