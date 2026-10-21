@@ -550,9 +550,10 @@ def _build_spatial_masks(
         )
 
     total_dendrites = n_dendrites_per_soma * n_soma
-    spine_shape = _grid_shape(n_spines)
+    #spine_shape = _grid_shape(n_spines)
     dendrite_shape = _grid_shape(total_dendrites)
     soma_shape = _grid_shape(n_soma)
+
     spine_projection_size = _projection_shape(spine_projection_size)
     dendrite_projection_size = _projection_shape(dendrite_projection_size)
     soma_projection_size = _projection_shape(soma_projection_size)
@@ -566,7 +567,11 @@ def _build_spatial_masks(
     )
 
     n_itd_spines = max(1, int(round(itd_spine_frac * n_spines)))
-    n_itd_spines = min(n_spines - 1, n_itd_spines)
+    #n_itd_spines = min(n_spines - 1, n_itd_spines)
+    n_ild_spines = n_spines - n_itd_spines
+
+    itd_spine_shape = _grid_shape(n_itd_spines)
+    ild_spine_shape = _grid_shape(n_ild_spines)
 
     def unit_center(index, shape):
         return np.unravel_index(index, shape)
@@ -579,28 +584,41 @@ def _build_spatial_masks(
             local_index = input_index
             n_bins = n_itd_bins
             spine_start, spine_end = 0, n_itd_spines
+            channel_shape = itd_spine_shape
         else:
             local_index = input_index - itd_inputs
             n_bins = n_ild_bins
             spine_start, spine_end = n_itd_spines, n_spines
+            channel_shape = ild_spine_shape
 
         row, col = input_center(local_index, n_bins)
+
         spine_rows = np.clip(
-            round(row * (spine_shape[0] - 1) / max(n_freq - 1, 1)),
-            0, spine_shape[0] - 1,
+            round(row * (channel_shape[0] - 1) / max(n_freq - 1, 1)),
+            0, channel_shape[0] - 1,
         )
+
         spine_cols = np.clip(
-            round(col * (spine_shape[1] - 1) / max(n_bins - 1, 1)),
-            0, spine_shape[1] - 1,
+            round(col * (channel_shape[1] - 1) / max(n_bins - 1, 1)),
+            0, channel_shape[1] - 1,
         )
-        active = _diamond_indices(
+
+        active_local = _diamond_indices(
             (spine_rows, spine_cols),
             spine_projection_size,
-            spine_shape,
+            channel_shape,
         )
-        input_spine[input_index, spine_start:spine_end] = active[
-            spine_start:spine_end
-        ]
+
+        input_spine[input_index, spine_start:spine_end] = active_local
+        
+        # active = _diamond_indices(
+        #     (spine_rows, spine_cols),
+        #     spine_projection_size,
+        #     spine_shape,
+        # )
+        # input_spine[input_index, spine_start:spine_end] = active[
+        #     spine_start:spine_end
+        # ]
 
     rng = np.random.default_rng(random_seed)
     dendrite_split = max(1, int(round(itd_spine_frac * total_dendrites)))
@@ -608,27 +626,39 @@ def _build_spatial_masks(
     for spine_index in range(n_spines):
         spine_is_itd = spine_index < n_itd_spines
 
-        if dendrite_rule == "random":
-            if channel_dend_split:
-                if spine_is_itd:
-                    dendrite_start = 0
-                    dendrite_end = dendrite_split
-                else:
-                    dendrite_start = dendrite_split
-                    dendrite_end = total_dendrites
-            else:
-                dendrite_start = 0
-                dendrite_end = total_dendrites
+        if spine_is_itd:
+            local_spine_index = spine_index
+            #local_spine_shape = itd_spine_shape
+            channel_spine_count = n_itd_spines
+        else:
+            local_spine_index = spine_index - n_itd_spines
+            #local_spine_shape = ild_spine_shape
+            channel_spine_count = n_ild_spines
 
+        if channel_dend_split:
+            if spine_is_itd:
+                dendrite_start = 0
+                dendrite_end = dendrite_split
+            else:
+                dendrite_start = dendrite_split
+                dendrite_end = total_dendrites
+        else:
+            dendrite_start = 0
+            dendrite_end = total_dendrites
+
+        channel_dendrite_count = dendrite_end - dendrite_start
+
+        if dendrite_rule == "random":
             center_index = int(rng.integers(dendrite_start, dendrite_end))
-            center = unit_center(center_index, dendrite_shape)
 
         else:
-            row, col = unit_center(spine_index, spine_shape)
-            center = (
-                round(row * (dendrite_shape[0] - 1) / max(spine_shape[0] - 1, 1)),
-                round(col * (dendrite_shape[1] - 1) / max(spine_shape[1] - 1, 1)),
+            # Map the local spine position only across this channel's dendrite band
+            centter_offset = round(
+                local_spine_index * (channel_dendrite_count - 1) / max(channel_spine_count - 1, 1)
             )
+            center_index = dendrite_start + centter_offset
+
+        center = unit_center(center_index, dendrite_shape)
 
         active = _diamond_indices(
             center,
@@ -636,15 +666,55 @@ def _build_spatial_masks(
             dendrite_shape,
         )
 
+        # Restrict the footprints to this channel
+
         if channel_dend_split:
             allowed = np.zeros(total_dendrites, dtype=bool)
-
-            if spine_is_itd:
-                allowed[:dendrite_split] = True
-            else:
-                allowed[dendrite_split:] = True
+            allowed[dendrite_start:dendrite_end] = True
             active &= allowed
+
         spine_dendrite[spine_index] = active
+
+        if not active.any():
+            raise RuntimeError(
+                f"Spine {spine_index} has no active dendrite connections. ")
+
+        #    if channel_dend_split:
+        #         if spine_is_itd:
+        #             dendrite_start = 0
+        #             dendrite_end = dendrite_split
+        #         else:
+        #             dendrite_start = dendrite_split
+        #             dendrite_end = total_dendrites
+        #     else:
+        #         dendrite_start = 0
+        #         dendrite_end = total_dendrites
+
+        #     center_index = int(rng.integers(dendrite_start, dendrite_end))
+        #     center = unit_center(center_index, dendrite_shape)
+
+        # else:
+        #     row, col = unit_center(local_spine_index, local_spine_shape)
+        #     center = (
+        #         round(row * (dendrite_shape[0] - 1) / max(local_spine_shape[0] - 1, 1)),
+        #         round(col * (dendrite_shape[1] - 1) / max(local_spine_shape[1] - 1, 1)),
+        #     )
+
+        # active = _diamond_indices(
+        #     center,
+        #     dendrite_projection_size,
+        #     dendrite_shape,
+        # )
+
+        # if channel_dend_split:
+        #     allowed = np.zeros(total_dendrites, dtype=bool)
+
+        #     if spine_is_itd:
+        #         allowed[:dendrite_split] = True
+        #     else:
+        #         allowed[dendrite_split:] = True
+        #     active &= allowed
+        # spine_dendrite[spine_index] = active
 
     for dendrite_index in range(total_dendrites):
         row, col = unit_center(dendrite_index, dendrite_shape)

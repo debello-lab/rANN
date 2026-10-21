@@ -656,29 +656,50 @@ def _build_file_suffix(cfg: dict) -> str:
 def _load_or_train_model(cfg, training_data, testing_data,
     plot_history, plot_weights
 ):
-    """Train or load a model, return full row dict for the summary."""
+    """Load a completed model or resume training for an incomplete model."""
     run_dir = cfg['run_dir']
-    tag     = cfg['tag']
-    
-    if os.path.exists(os.path.join(run_dir, "model.keras")):
-        x_te, y_te = testing_data
+    model_path = os.path.join(run_dir, "model.keras")
+    config_path = os.path.join(run_dir, "config.json")
 
-        # Load saved model and metrics
-        print(f"  Skipping (already exists) — loading metrics from config.json")
-        with open(os.path.join(run_dir, "config.json")) as f:
+    saved_cfg = {}
+    if os.path.exists(config_path):
+        with open(config_path) as f:
             saved_cfg = json.load(f)
+
+    history = saved_cfg.get("history", {})
+    trained_epochs = len(history.get("loss", []))
+    requested_epochs = cfg.get("epochs", 0)
+
+    model_exist = os.path.exists(model_path)
+    training_complete = (
+        model_exist
+        and trained_epochs >= requested_epochs
+        and trained_epochs > 0
+    )
+
+    if training_complete:
+        print(f"  Skipping (already trained) — loading metrics from config.json")
+        x_te, y_te = testing_data
+        # Load saved model and metrics
+    
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=UserWarning)
-            y_pred = tf.keras.models.load_model(run_dir + "/model.keras")(x_te).numpy()
+            model = tf.keras.models.load_model(model_path, compile=False)
 
+        y_pred = model(x_te, training=False).numpy()
         abs_err = np.abs(y_pred - y_te)
-        val_losses = cfg['history']["val_loss"]
-        best_val = min(val_losses)
-        threshold = val_losses[0] - 0.9 * (val_losses[0] - best_val)
-        epoch_90 = next((i + 1 for i, v in enumerate(val_losses) if v <= threshold), len(val_losses))
 
-        if plot_history:
-            plot_training_history(cfg['history'], run_name=tag, run_dir=run_dir, show=False)
+        val_losses = history.get("val_loss", [])
+        best_val = min(val_losses) if val_losses else None
+
+        if val_losses:
+            threshold = val_losses[0] - 0.9 * (val_losses[0] - best_val)
+            epoch_90 = next((i + 1 for i, v in enumerate(val_losses) if v <= threshold), len(val_losses))
+        else:
+            epoch_90 = None
+
+        if plot_history and history:
+            plot_training_history(cfg['history'], run_name=cfg["tag"], run_dir=run_dir, show=False)
 
         ms = cfg.get("mask_summary")
 
@@ -697,11 +718,37 @@ def _load_or_train_model(cfg, training_data, testing_data,
         })
         
         return cfg
-    else:
-        # Train new model
-        return _run_one(cfg, training_data, testing_data, plot_history=plot_history, plot_weights=plot_weights)
+    
+    if model_exist:
+        print(f"  Resuming training from {model_path} (trained_epochs={trained_epochs})")
+        
+        return _run_one(
+            cfg, 
+            training_data, 
+            testing_data, 
+            plot_history=plot_history, 
+            plot_weights=plot_weights,
+            previous_history=history
+        )
 
-def _run_one(cfg, training_data, testing_data, plot_history=False, plot_weights=False) -> dict:
+    print(f" Training new model (no existing model found at {model_path})")
+    # Train new model
+    return _run_one(
+        cfg, 
+        training_data, 
+        testing_data, 
+        plot_history=plot_history, 
+        plot_weights=plot_weights)
+
+def _run_one(cfg, 
+             training_data, 
+             testing_data, 
+             plot_history=False, 
+             plot_weights=False,
+             model_path=None,
+             initial_epoch=0,
+             previous_history=None
+    ) -> dict:
     """
     Run one training session for a single config dict.
     Returns a dict of results (JSON-safe).
@@ -718,20 +765,25 @@ def _run_one(cfg, training_data, testing_data, plot_history=False, plot_weights=
     soma_mask     = m3 if cfg["constrained"] else None
 
     # ── Build model ───────────────────────────────────────────────────────────
-    model = rANN(
-        input_dim    = cfg['input_dim'],
-        output_dim   = cfg['output_dim'],
-        n_spines     = cfg['n_spines'],
-        n_freq       = cfg['n_freq'],
-        n_itd_bins   = cfg['n_itd_bins'],
-        n_ild_bins   = cfg['n_ild_bins'],
-        n_dendrites_per_soma = cfg['n_dendrites_per_soma'],
-        n_soma       = cfg['n_soma'],
-        spine_mask    = spine_mask,
-        dendrite_mask = dendrite_mask,
-        soma_mask     = soma_mask,
-        l2_reg        = cfg['l2_reg'],
-    )
+    if model_path is not None and os.path.exists(model_path):
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=UserWarning)
+            model = tf.keras.models.load_model(model_path)
+    else:
+        model = rANN(
+            input_dim    = cfg['input_dim'],
+            output_dim   = cfg['output_dim'],
+            n_spines     = cfg['n_spines'],
+            n_freq       = cfg['n_freq'],
+            n_itd_bins   = cfg['n_itd_bins'],
+            n_ild_bins   = cfg['n_ild_bins'],
+            n_dendrites_per_soma = cfg['n_dendrites_per_soma'],
+            n_soma       = cfg['n_soma'],
+            spine_mask    = spine_mask,
+            dendrite_mask = dendrite_mask,
+            soma_mask     = soma_mask,
+            l2_reg        = cfg['l2_reg'],
+        )
     model.compile(
         optimizer = 'adam', #tf.keras.optimizers.Adam(learning_rate=lr),
         loss      = tf.keras.losses.MeanSquaredError(),
@@ -776,11 +828,22 @@ def _run_one(cfg, training_data, testing_data, plot_history=False, plot_weights=
     hist = model.fit(
         train_dataset, 
         validation_data=test_dataset, 
+        initial_epoch=initial_epoch,
         epochs=cfg['epochs'], 
         batch_size=cfg['batch_size'],
         verbose=0,
         callbacks=callbacks
         )
+
+    new_history = hist.history
+
+    if previous_history:
+        combined_history = {}
+        for key in set(previous_history.keys()).union(new_history.keys()):
+            combined_history[key] = previous_history.get(key, []) + new_history.get(key, [])
+        hist.history = combined_history
+
+    layer_sarle_bc = calculate_layer_sarle_bc(model)
 
     wall_time = time.perf_counter() - t_start
 
@@ -828,7 +891,9 @@ def _run_one(cfg, training_data, testing_data, plot_history=False, plot_weights=
     cfg['final_mae_el']    = mae_el
     cfg['epoch_90pct']     = epoch_90
     cfg['convergence_efficiency'] = convergence_efficiency
+    cfg['sarle_bc'] = layer_sarle_bc
     cfg['wall_time_s']     = round(wall_time, 2)
+    cfg['n_epochs_trained'] = len(hist.history["loss"])
     cfg['history']         = hist.history
     with open(os.path.join(cfg["run_dir"], "config.json"), "w") as f:
         json.dump(cfg, f, indent=2)
@@ -1170,3 +1235,56 @@ def load_sweep_configs(output_root: str) -> list[dict]:
         if os.path.exists(cfg_path):
             configs.append(load_config(os.path.join(output_root, name)))
     return configs
+
+def sarle_bimodality_coefficient(values: np.ndarray) -> Optional[float]:
+    """Calculate Sarle's Bimodality Coefficient from a 1-D sample."""
+    values = np.asarray(values, dtype=np.float64).ravel()
+    values = values[np.isfinite(values)]
+
+    if values.size < 4:
+        return None
+
+    mean = np.mean(values)
+    centered = values - mean
+
+    m2 = np.mean(centered ** 2)
+    if m2 <= np.finfo(np.float64).eps:
+        return None
+
+    m3 = np.mean(centered ** 3)
+    m4 = np.mean(centered ** 4)
+
+    skewness = m3 / (m2 ** 1.5)
+    pearson_kurtosis = m4 / (m2 ** 2)
+
+    if pearson_kurtosis <= 0:
+        return None
+
+    return float((skewness ** 2 + 1.0) / pearson_kurtosis)
+
+
+def calculate_layer_sarle_bc(model: tf.keras.Model) -> dict[str, Optional[float]]:
+    """Calculate Sarle's BC for each layer's final kernel weights."""
+    coefficients = {}
+
+    for layer in model.layers:
+        kernel = getattr(layer, "kernel", None)
+
+        # MaskedDense uses `w` instead of Keras' usual `kernel`.
+        if kernel is None:
+            kernel = getattr(layer, "w", None)
+
+        if kernel is None:
+            continue
+
+        values = kernel.numpy()
+
+        # Exclude forbidden connections from MaskedDense layers.
+        mask = getattr(layer, "mask", None)
+        if mask is not None and hasattr(mask, "numpy"):
+            mask_values = mask.numpy()
+            values = values[mask_values != 0]
+
+        coefficients[layer.name] = sarle_bimodality_coefficient(values)
+
+    return coefficients
